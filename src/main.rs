@@ -1,4 +1,3 @@
-use dotenv;
 use hex::ToHex;
 use rusoto_core::Region;
 use rusoto_dynamodb::{AttributeValue, DynamoDb, DynamoDbClient};
@@ -79,12 +78,10 @@ impl EventHandler for Handler {
                             if let Err(error) = result {
                                 println!("Error: {:?}", error);
                                 match error {
-                                    rusoto_core::RusotoError::Service(s) => match s {
-                                        rusoto_dynamodb::PutItemError::ConditionalCheckFailed(
-                                            _,
-                                        ) => String::from("Your account is already in the list."),
-                                        _ => String::from("An error has occurred"),
-                                    },
+                                    rusoto_core::RusotoError::Service(
+                                        rusoto_dynamodb::PutItemError::ConditionalCheckFailed(_),
+                                    ) => String::from("Your account is already in the list."),
+
                                     _ => String::from("An error has occurred"),
                                 }
                             } else {
@@ -149,12 +146,10 @@ impl EventHandler for Handler {
                             if let Err(error) = result {
                                 println!("Error: {:?}", error);
                                 match error {
-                                    rusoto_core::RusotoError::Service(s) => match s {
-                                        rusoto_dynamodb::PutItemError::ConditionalCheckFailed(
-                                            _,
-                                        ) => String::from("Your account is not in the list."),
-                                        _ => String::from("An error has occurred"),
-                                    },
+                                    rusoto_core::RusotoError::Service(
+                                        rusoto_dynamodb::PutItemError::ConditionalCheckFailed(_),
+                                    ) => String::from("Your account is not in the list."),
+
                                     _ => String::from("An error has occurred"),
                                 }
                             } else {
@@ -235,7 +230,7 @@ async fn main() {
 
     let token = dotenv::var("token").unwrap();
 
-    let application_id: u64 = dotenv::var("app_id").unwrap();
+    let application_id: u64 = dotenv::var("app_id").unwrap().parse().unwrap();
 
     let mut client = Client::builder(token)
         .event_handler(Handler)
