@@ -1,5 +1,5 @@
 [package]
-name = "wallet-collector"
+name = "wallet-collector-funder"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,12 +9,15 @@ edition = "2021"
 serenity = { version = "0.10.9", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "unstable_discord_api"] }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 hex = "*"
-rusoto = "0.24.2"
-rusoto_core = "0.47.0"
-rusoto_dynamodb = "0.47.0"
+rusoto = { version = "0.24.2", optional = true }
+rusoto_core = { version = "0.47.0", optional = true }
+rusoto_dynamodb = { version = "0.47.0", optional = true }
 dotenv = "*"
+subxt = { git = "https://github.com/paritytech/subxt/", branch = "master", optional = true }
+sp-core = { version = "6.0.0" }
+codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = ["derive", "full", "bit-vec"] }
 
-[dependencies.sp-core]
-git = 'https://github.com/paritytech/substrate.git'
-tag = 'monthly-2021-12'
-version = '4.0.0-dev'
+[features]
+default = ["funder"]
+collector = ["rusoto", "rusoto_core", "rusoto_dynamodb"]
+funder = ["subxt"]

@@ -1,5 +1,8 @@
+#[cfg(feature = "collector")]
 use hex::ToHex;
+#[cfg(feature = "collector")]
 use rusoto_core::Region;
+#[cfg(feature = "collector")]
 use rusoto_dynamodb::{AttributeValue, DynamoDb, DynamoDbClient};
 use serenity::{
     async_trait,
@@ -15,16 +18,23 @@ use serenity::{
     },
     prelude::*,
 };
-use sp_core::crypto::Ss58Codec;
+use sp_core::{crypto::Ss58Codec, Pair};
+#[cfg(feature = "collector")]
 use std::collections::HashMap;
+use subxt::{DefaultConfig, DefaultExtra, PairSigner};
 
 struct Handler;
+
+#[cfg(feature = "funder")]
+#[subxt::subxt(runtime_metadata_path = "src/chain_metadata.scale")]
+pub mod chain {}
 
 #[async_trait]
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
             let content = match command.data.name.as_str() {
+                #[cfg(feature = "collector")]
                 "give_wallet" => {
                     let options = command
                         .data
@@ -95,6 +105,7 @@ impl EventHandler for Handler {
                     }
                 }
 
+                #[cfg(feature = "collector")]
                 "replace_wallet" => {
                     let options = command
                         .data
@@ -163,6 +174,54 @@ impl EventHandler for Handler {
                     }
                 }
 
+                #[cfg(feature = "funder")]
+                "fund_wallet" => {
+                    let options = command
+                        .data
+                        .options
+                        .get(0)
+                        .expect("Expected user option")
+                        .resolved
+                        .as_ref()
+                        .expect("Expected user object");
+
+                    if let ApplicationCommandInteractionDataOptionValue::String(string) = options {
+                        if let Ok(accountid) = sp_core::crypto::AccountId32::from_ss58check(string)
+                        {
+                            let api = ctx.data.write().await;
+                            let api: &chain::RuntimeApi<DefaultConfig, DefaultExtra<_>> =
+                                api.get::<DbData>().unwrap();
+
+                            if let Ok(_) = api
+                                .tx()
+                                .balances()
+                                .transfer(
+                                    accountid.into(),
+                                    dotenv::var("amount").unwrap().parse::<u128>().unwrap()
+                                        * 1000_000_000_000,
+                                )
+                                .sign_and_submit(&PairSigner::new(
+                                    sp_core::sr25519::Pair::from_phrase(
+                                        dotenv::var("signer").unwrap().as_str(),
+                                        None,
+                                    )
+                                    .unwrap()
+                                    .0,
+                                ))
+                                .await
+                            {
+                                String::from("Funding call submitted on chain!")
+                            } else {
+                                String::from("Error trying to fund account.")
+                            }
+                        } else {
+                            String::from("Please provide a valid address.")
+                        }
+                    } else {
+                        String::from("Please provide a valid address.")
+                    }
+                }
+
                 _ => String::from("Not implemented."),
             };
 
@@ -186,6 +245,7 @@ impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
 
+        #[cfg(feature = "collector")]
         ApplicationCommand::create_global_application_command(&ctx.http, |command| {
             command
                 .name("give_wallet")
@@ -201,10 +261,27 @@ impl EventHandler for Handler {
         .await
         .unwrap();
 
+        #[cfg(feature = "collector")]
         ApplicationCommand::create_global_application_command(&ctx.http, |command| {
             command
                 .name("replace_wallet")
                 .description("Replace the wallet you gave to the bot")
+                .create_option(|option| {
+                    option
+                        .name("wallet")
+                        .description("The actual wallet")
+                        .kind(ApplicationCommandOptionType::String)
+                        .required(true)
+                })
+        })
+        .await
+        .unwrap();
+
+        #[cfg(feature = "funder")]
+        ApplicationCommand::create_global_application_command(&ctx.http, |command| {
+            command
+                .name("fund_wallet")
+                .description("Fund your wallet with TINK test tokens!")
                 .create_option(|option| {
                     option
                         .name("wallet")
@@ -221,7 +298,10 @@ impl EventHandler for Handler {
 struct DbData;
 
 impl TypeMapKey for DbData {
+    #[cfg(feature = "collector")]
     type Value = DynamoDbClient;
+    #[cfg(feature = "funder")]
+    type Value = chain::RuntimeApi<DefaultConfig, DefaultExtra<DefaultConfig>>;
 }
 
 #[tokio::main]
@@ -237,11 +317,23 @@ async fn main() {
         .application_id(application_id)
         .await
         .expect("Error creating client");
+
+    #[cfg(feature = "collector")]
     {
         let db_client = DynamoDbClient::new(Region::UsEast1);
         let mut data = client.data.write().await;
         data.insert::<DbData>(db_client);
     }
+
+    #[cfg(feature = "funder")]
+    client.data.write().await.insert::<DbData>(
+        subxt::ClientBuilder::new()
+            .set_url(dotenv::var("endpoint").unwrap())
+            .build()
+            .await
+            .unwrap()
+            .to_runtime_api::<chain::RuntimeApi<DefaultConfig, DefaultExtra<_>>>(),
+    );
 
     if let Err(why) = client.start().await {
         println!("Client error: {:?}", why);
