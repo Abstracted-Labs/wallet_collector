@@ -33,7 +33,7 @@ pub mod chain {}
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
-            let content = match command.data.name.as_str() {
+            let content: Result<String, String> = match command.data.name.as_str() {
                 #[cfg(feature = "collector")]
                 "give_wallet" => {
                     let options = command
@@ -90,18 +90,18 @@ impl EventHandler for Handler {
                                 match error {
                                     rusoto_core::RusotoError::Service(
                                         rusoto_dynamodb::PutItemError::ConditionalCheckFailed(_),
-                                    ) => String::from("Your account is already in the list."),
+                                    ) => Ok(String::from("Your account is already in the list.")),
 
-                                    _ => String::from("An error has occurred"),
+                                    _ => Ok(String::from("An error has occurred")),
                                 }
                             } else {
-                                String::from("Address added succesfully!")
+                                Ok(String::from("Address added succesfully!"))
                             }
                         } else {
-                            String::from("Please provide a valid address.")
+                            Ok(String::from("Please provide a valid address."))
                         }
                     } else {
-                        String::from("Please provide a valid address.")
+                        Ok(String::from("Please provide a valid address."))
                     }
                 }
 
@@ -159,18 +159,18 @@ impl EventHandler for Handler {
                                 match error {
                                     rusoto_core::RusotoError::Service(
                                         rusoto_dynamodb::PutItemError::ConditionalCheckFailed(_),
-                                    ) => String::from("Your account is not in the list."),
+                                    ) => Ok(String::from("Your account is not in the list.")),
 
-                                    _ => String::from("An error has occurred"),
+                                    _ => Ok(String::from("An error has occurred")),
                                 }
                             } else {
-                                String::from("Address added succesfully!")
+                                Ok(String::from("Address added succesfully!"))
                             }
                         } else {
-                            String::from("Please provide a valid address.")
+                            Ok(String::from("Please provide a valid address."))
                         }
                     } else {
-                        String::from("Please provide a valid address.")
+                        Ok(String::from("Please provide a valid address."))
                     }
                 }
 
@@ -210,19 +210,19 @@ impl EventHandler for Handler {
                                 ))
                                 .await
                             {
-                                String::from("Funding call submitted on chain!")
+                                Ok(String::from("Funding call submitted on chain!"))
                             } else {
-                                String::from("Error trying to fund account.")
+                                Err(String::from("Error trying to fund account."))
                             }
                         } else {
-                            String::from("Please provide a valid address.")
+                            Ok(String::from("Please provide a valid address."))
                         }
                     } else {
-                        String::from("Please provide a valid address.")
+                        Ok(String::from("Please provide a valid address."))
                     }
                 }
 
-                _ => String::from("Not implemented."),
+                _ => Ok(String::from("Not implemented.")),
             };
 
             if let Err(why) = command
@@ -231,13 +231,20 @@ impl EventHandler for Handler {
                         .kind(InteractionResponseType::ChannelMessageWithSource)
                         .interaction_response_data(|message| {
                             message
-                                .content(content)
+                                .content(match content.clone() {
+                                    Ok(msg) => msg,
+                                    Err(post_info) => post_info,
+                                })
                                 .flags(InteractionApplicationCommandCallbackDataFlags::EPHEMERAL)
                         })
                 })
                 .await
             {
                 println!("Cannot respond to slash command: {}", why);
+            }
+
+            if let Err(why) = content {
+                panic!("Called panic on a restart-required error: '{}'", why);
             }
         }
     }
