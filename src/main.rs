@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 #[cfg(feature = "collector")]
 use hex::ToHex;
 #[cfg(feature = "collector")]
@@ -18,15 +20,18 @@ use serenity::{
     },
     prelude::*,
 };
-use sp_core::{crypto::Ss58Codec, Pair};
+use sp_core::{
+    crypto::{AccountId32, Ss58Codec},
+    Pair,
+};
 #[cfg(feature = "collector")]
 use std::collections::HashMap;
-use subxt::{DefaultConfig, DefaultExtra, PairSigner};
+use subxt::{tx::PairSigner, OnlineClient, PolkadotConfig};
 
 struct Handler;
 
 #[cfg(feature = "funder")]
-#[subxt::subxt(runtime_metadata_path = "src/chain_metadata.scale")]
+#[subxt::subxt(runtime_metadata_url = "wss://brainstorm.invarch.network:443")]
 pub mod chain {}
 
 #[async_trait]
@@ -176,49 +181,47 @@ impl EventHandler for Handler {
 
                 #[cfg(feature = "funder")]
                 "fund_wallet" => {
-                    let options = command
-                        .data
-                        .options
-                        .get(0)
-                        .expect("Expected user option")
-                        .resolved
-                        .as_ref()
-                        .expect("Expected user object");
-
-                    if let ApplicationCommandInteractionDataOptionValue::String(string) = options {
-                        if let Ok(accountid) = sp_core::crypto::AccountId32::from_ss58check(string)
-                        {
-                            let api = ctx.data.write().await;
-                            let api: &chain::RuntimeApi<DefaultConfig, DefaultExtra<_>> =
-                                api.get::<DbData>().unwrap();
-
-                            if let Ok(_) = api
-                                .tx()
-                                .balances()
-                                .transfer(
-                                    accountid.into(),
-                                    dotenv::var("amount").unwrap().parse::<u128>().unwrap()
-                                        * 1000_000_000_000,
-                                )
-                                .sign_and_submit(&PairSigner::new(
-                                    sp_core::sr25519::Pair::from_phrase(
-                                        dotenv::var("signer").unwrap().as_str(),
-                                        None,
-                                    )
-                                    .unwrap()
-                                    .0,
-                                ))
-                                .await
+                    if let Some(o) = command.data.options.get(0) {
+                        if let Some(options) = o.resolved.as_ref() {
+                            if let ApplicationCommandInteractionDataOptionValue::String(string) =
+                                options
                             {
-                                Ok(String::from("Funding call submitted on chain!"))
+                                if let Ok(accountid) =
+                                    sp_core::crypto::AccountId32::from_ss58check(string)
+                                {
+                                    let data = ctx.data.write().await;
+                                    if let Some((api, pair_signer, amount, db)) =
+                                        data.get::<DbData>()
+                                    {
+                                        match handle_funding_command(
+                                            api,
+                                            pair_signer,
+                                            *amount,
+                                            db,
+                                            command.user.id.to_string(),
+                                            accountid,
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => {
+                                                Ok(String::from("Funding call submitted on chain!"))
+                                            }
+                                            Err(e) => Err(e),
+                                        }
+                                    } else {
+                                        Err(String::from("Error trying to fund account."))
+                                    }
+                                } else {
+                                    Ok(String::from("Please provide a valid address."))
+                                }
                             } else {
-                                Err(String::from("Error trying to fund account."))
+                                Ok(String::from("Please provide a valid address."))
                             }
                         } else {
-                            Ok(String::from("Please provide a valid address."))
+                            Err(String::from("Error trying to fund account."))
                         }
                     } else {
-                        Ok(String::from("Please provide a valid address."))
+                        Err(String::from("Error trying to fund account."))
                     }
                 }
 
@@ -243,9 +246,9 @@ impl EventHandler for Handler {
                 println!("Cannot respond to slash command: {}", why);
             }
 
-            if let Err(why) = content {
-                panic!("Called panic on a restart-required error: '{}'", why);
-            }
+            //  if let Err(why) = content {
+            //      panic!("Called panic on a restart-required error: '{}'", why);
+            //  }
         }
     }
 
@@ -288,7 +291,7 @@ impl EventHandler for Handler {
         ApplicationCommand::create_global_application_command(&ctx.http, |command| {
             command
                 .name("fund_wallet")
-                .description("Fund your wallet with TINK test tokens!")
+                .description("Fund your wallet with 🧠⛈️ test tokens!")
                 .create_option(|option| {
                     option
                         .name("wallet")
@@ -302,13 +305,48 @@ impl EventHandler for Handler {
     }
 }
 
+async fn handle_funding_command(
+    api: &OnlineClient<PolkadotConfig>,
+    pair_signer: &PairSigner<PolkadotConfig, sp_core::sr25519::Pair>,
+    amount: u128,
+    db: &sled::Db,
+    discord_id: String,
+    account_id: AccountId32,
+) -> Result<(), String> {
+    if !db
+        .contains_key(discord_id.clone())
+        .map_err(|_| String::from("Error trying to fund account."))?
+    {
+        let transfer_call = chain::tx()
+            .balances()
+            .transfer(account_id.clone().into(), amount);
+
+        api.tx()
+            .sign_and_submit_default(&transfer_call, pair_signer)
+            .await
+            .map_err(|_| String::from("Error trying to fund account."))?;
+
+        db.insert(discord_id, account_id.to_string().as_bytes())
+            .map_err(|_| String::from("Error trying to fund account."))?;
+
+        Ok(())
+    } else {
+        Err(String::from("You already registered in the faucet."))
+    }
+}
+
 struct DbData;
 
 impl TypeMapKey for DbData {
     #[cfg(feature = "collector")]
     type Value = DynamoDbClient;
     #[cfg(feature = "funder")]
-    type Value = chain::RuntimeApi<DefaultConfig, DefaultExtra<DefaultConfig>>;
+    type Value = (
+        OnlineClient<PolkadotConfig>,
+        PairSigner<PolkadotConfig, sp_core::sr25519::Pair>,
+        u128,
+        sled::Db,
+    );
 }
 
 #[tokio::main]
@@ -333,14 +371,18 @@ async fn main() {
     }
 
     #[cfg(feature = "funder")]
-    client.data.write().await.insert::<DbData>(
-        subxt::ClientBuilder::new()
-            .set_url(dotenv::var("endpoint").unwrap())
-            .build()
+    client.data.write().await.insert::<DbData>((
+        OnlineClient::<PolkadotConfig>::from_url("wss://brainstorm.invarch.network:443")
             .await
-            .unwrap()
-            .to_runtime_api::<chain::RuntimeApi<DefaultConfig, DefaultExtra<_>>>(),
-    );
+            .unwrap(),
+        PairSigner::new(
+            sp_core::sr25519::Pair::from_phrase(dotenv::var("signer").unwrap().as_str(), None)
+                .unwrap()
+                .0,
+        ),
+        dotenv::var("amount").unwrap().parse::<u128>().unwrap() * 1_000_000_000_000,
+        sled::open("user_db").unwrap(),
+    ));
 
     if let Err(why) = client.start().await {
         println!("Client error: {:?}", why);

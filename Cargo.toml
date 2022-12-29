@@ -16,9 +16,10 @@ rusoto = { version = "0.24.2", optional = true }
 rusoto_core = { version = "0.47.0", optional = true }
 rusoto_dynamodb = { version = "0.47.0", optional = true }
 dotenv = "*"
-subxt = { git = "https://github.com/paritytech/subxt/", branch = "master", optional = true }
-sp-core = { version = "6.0.0" }
+subxt = { git = "https://github.com/paritytech/subxt/", rev = "0ff4e13b838f2f8ca7a87f120024563ed5ec4d3f", optional = true }
+sp-core = { version = "7.0.0" }
 codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = ["derive", "full", "bit-vec"] }
+sled = "0.34.7"
 
 [features]
 default = ["funder"]
